@@ -1,0 +1,14 @@
+[Unit]
+Description=redsocks transparent proxy nftables rules
+After=network-online.target redsocks.service
+Wants=network-online.target
+Requires=redsocks.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/redsocks-nft start
+ExecStop=/usr/local/sbin/redsocks-nft stop
+
+[Install]
+WantedBy=multi-user.target
