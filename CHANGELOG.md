@@ -3,6 +3,14 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0] - 2026-09-19
+
+### Added
+
+- 架构示意图：`docs/architecture.png`（中文）/ `docs/architecture.en.png`（English）
+- 图表生成脚本 `docs/architecture.py`（生成 SVG，`rsvg-convert` 渲染 PNG）
+- README / README.en 中引用示意图
+
 ## [1.0.0] - 2026-09-19
 
 ### Added

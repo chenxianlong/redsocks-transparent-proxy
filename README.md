@@ -12,6 +12,11 @@ English: [README.en.md](README.en.md) · 变更记录: [CHANGELOG.md](CHANGELOG.
 
 ## 架构
 
+![架构图](docs/architecture.png)
+
+> 源文件：[`docs/architecture.svg`](docs/architecture.svg)（中文）/ [`docs/architecture.en.svg`](docs/architecture.en.svg)（English）；
+> 用 `python3 docs/architecture.py` 重新生成，PNG 用 `rsvg-convert -z 2 -o docs/architecture.png docs/architecture.svg` 渲染。
+
 ```
 应用
  ├─ DNS → 127.0.0.1:53 (dnsmasq)

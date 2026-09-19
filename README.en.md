@@ -11,6 +11,12 @@ Built on `redsocks` + `nftables` + `dnsmasq` + `unbound`. No application config 
 
 ## How it works
 
+![architecture](docs/architecture.en.png)
+
+> Source: [`docs/architecture.svg`](docs/architecture.svg) (中文) / [`docs/architecture.en.svg`](docs/architecture.en.svg);
+> regenerate with `python3 docs/architecture.py`, then
+> `rsvg-convert -z 2 -o docs/architecture.en.png docs/architecture.en.svg`.
+
 ```
 app
  ├─ DNS → 127.0.0.1:53 (dnsmasq)
