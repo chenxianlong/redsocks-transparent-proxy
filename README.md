@@ -119,13 +119,65 @@ sudo bash scripts/install.sh --proxy HOST:PORT --allowlist
 
 ## 性能
 
-- **国内流量**：只多一遍内核 nftables 集合匹配（红黑树，纳秒级），实测 redsocks **CPU 0.0 ms**，吞吐打满链路。
-- **国外流量**：redsocks 用 `splice()` 做用户态中继。实测 200 Mbps 下载仅占**单核 4.5%**，粗略单核可跑 2–4 Gbps。
-- **代价**：国外**首次** DNS 200–400 ms（命中缓存后 0 ms）；redsocks 是单线程，极高带宽时会 CPU 受限。
-- **并发**：`redsocks_conn_max` 默认只有 **128**（systemd `LimitNOFILESoft=1024` 导致），
-  安装脚本已默认调到 **8192**（`--conn-max` 可改）。
+结论：**国内流量几乎零开销；开销几乎全在「国外流量经 redsocks 中继」这一段**，
+对普通服务器（< 1 Gbps、几百并发）可以忽略。
 
-详细数据与复现方法见 [docs/performance.md](docs/performance.md)。
+### 实测（Debian 13 / x86_64）
+
+| 场景 | 吞吐 | 连接延迟 | redsocks CPU |
+| --- | --- | --- | --- |
+| 国内直连下载（USTC 镜像） | 25.2 MB/s（≈202 Mbps） | connect 31 ms | **0.0 ms**（不经过 redsocks） |
+| 国外经代理下载（Cloudflare 50 MB） | 25.0 MB/s（≈200 Mbps） | connect 174 ms | **90 ms / 2.0 s = 单核 4.5%** |
+
+反推：50 MB ≈ 0.4 Gbit 用掉 90 ms CPU → 约 **225 ms CPU / Gbit**，
+粗略外推单核可跑 **2–4 Gbps**（高带宽下非线性，仅作量级参考）。
+
+DNS 解析（`dig` Query time，本机 `127.0.0.1`）：
+
+| 域名 | 首次 | 缓存后 |
+| --- | --- | --- |
+| `www.taobao.com` / `www.163.com`（国内） | 8 / 4 ms | **0 ms** |
+| `www.google.com`（国外） | 52 ms | 4 ms |
+| `www.wikipedia.org` / `www.reddit.com`（国外） | **408 / 224 ms** | **0 ms** |
+
+redsocks 常驻内存 ~1.5 MB（RSS），空闲 CPU 0%。
+
+### 几乎无开销的部分
+
+- **国内直连流量**：只多走一遍内核 nftables 集合匹配。`chnroute` 是 `flags interval` 集，
+  内核用红黑树查找，5513 条约 13 次比较/包，纳秒级且**不产生用户态开销** ——
+  实测 redsocks **CPU 0.0 ms**，吞吐打满链路。
+- **110,573 条中国域名规则**：dnsmasq 内部是域名树后缀匹配，与规则条数关系不大；
+  内存几十 MB 量级，查询仍是个位数 ms。
+- **直连白名单 / 私有地址**：同样是内核 set / 前缀匹配。
+
+### 有开销的部分
+
+1. **国外首次 DNS：200–400 ms**
+   因为 `dnsmasq → unbound → TCP 连接 → redsocks → 代理 → 8.8.8.8` 要串好几个 RTT。
+   这是「防污染」必须付的代价；**命中缓存后为 0 ms**，只影响冷启动/新域名。
+2. **国外 TCP：redsocks 用户态中继**
+   每个国外连接在内核被 REDIRECT 到 `127.0.0.1:12345`，redsocks accept 后再以 SOCKS5
+   连到代理并双向转发。redsocks 0.5 在 Linux 上用 **`splice()`**（日志里能看到
+   `redsplice_write_cb`），数据不进用户态、走内核 pipe，比普通 read/write 中继省很多；
+   但它仍是**单线程 epoll**，极高带宽（> 1 Gbps）时单核会成为瓶颈。
+   延迟上多一跳「本机 → 代理」，本例代理在局域网，这一跳 <1 ms。
+3. **并发连接数（默认值是个坑）**
+   `redsocks_conn_max` 不配置时 = `0.75 × nofile / 6`（splice 模式）。
+   systemd 默认 `LimitNOFILESoft=1024` → **默认只能同时 128 条连接**，超出直接丢。
+   安装脚本已默认写入 `rlimit_nofile = 65536` + `redsocks_conn_max = 8192`
+   （`--conn-max` 可调），实测生效 `conn_max=8192`。
+
+### 什么时候需要换方案
+
+| 需求 | 建议 |
+| --- | --- |
+| 本机浏览 / API / 一般下载（< 1 Gbps） | 本方案足够，开销可忽略 |
+| 高强度下载、> 1 Gbps | redsocks 单线程可能成瓶颈，考虑多线程透明代理（如 `sing-box` tproxy）或内核态方案 |
+| 局域网网关（几十~几百客户端） | 本方案 + `--gateway`，`--conn-max` 给足 |
+| 只要极致性能、不介意每应用配置 | 应用层直配 SOCKS5，省掉内核转发与 redsocks 中继 |
+
+完整版与复现脚本见 [docs/performance.md](docs/performance.md)。
 
 ## 维护
 

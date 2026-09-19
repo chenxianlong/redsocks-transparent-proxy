@@ -108,16 +108,67 @@ With `--gateway`:
 
 ## Performance
 
-- **China traffic**: only one extra in-kernel nftables set lookup (rbtree, ~ns);
-  measured redsocks **CPU 0.0 ms**, line-rate throughput.
-- **Overseas traffic**: redsocks relays with `splice()`. Measured ~4.5% of one core
-  at 200 Mbps; a single core roughly handles 2–4 Gbps.
-- **Cost**: first overseas DNS lookup 200–400 ms (0 ms once cached); redsocks is
-  single-threaded, so CPU can cap very high bandwidth.
-- **Concurrency**: `redsocks_conn_max` defaults to only **128** (systemd caps
-  `LimitNOFILESoft` at 1024); the installer now sets **8192** (`--conn-max`).
+Bottom line: **China traffic is essentially free; the cost is almost entirely in
+"overseas traffic relayed by redsocks"**, and it is negligible for a normal server
+(< 1 Gbps, a few hundred concurrent connections).
 
-See [docs/performance.md](docs/performance.md) for numbers and how to reproduce.
+### Measured (Debian 13 / x86_64)
+
+| Scenario | Throughput | Connect | redsocks CPU |
+| --- | --- | --- | --- |
+| China direct (USTC mirror) | 25.2 MB/s (≈202 Mbps) | 31 ms | **0.0 ms** (not involved) |
+| Overseas via proxy (Cloudflare 50 MB) | 25.0 MB/s (≈200 Mbps) | 174 ms | **90 ms / 2.0 s = 4.5% of one core** |
+
+That is roughly **225 ms CPU per Gbit** — a single core can do about **2–4 Gbps**
+(non-linear at high rates; order-of-magnitude only).
+
+DNS (`dig` Query time):
+
+| Domain | First | Cached |
+| --- | --- | --- |
+| www.taobao.com / www.163.com (China) | 8 / 4 ms | **0 ms** |
+| www.google.com (overseas) | 52 ms | 4 ms |
+| www.wikipedia.org / www.reddit.com (overseas) | **408 / 224 ms** | **0 ms** |
+
+redsocks RSS ~1.5 MB, 0% CPU when idle.
+
+### Where there is (almost) no overhead
+
+- **China traffic**: only one extra in-kernel nftables set lookup. `chnroute` is a
+  `flags interval` set (rbtree), 5513 entries ≈ 13 comparisons/packet, nanoseconds,
+  no userspace cost — measured **0.0 ms** redsocks CPU at line rate.
+- **110,573 China domain rules**: dnsmasq matches by a domain suffix tree, largely
+  independent of rule count; tens of MB RAM, single-digit ms lookups.
+- **Direct whitelist / private ranges**: kernel prefix matching too.
+
+### Where the cost is
+
+1. **First overseas DNS: 200–400 ms** — `dnsmasq → unbound → TCP → redsocks → proxy
+   → 8.8.8.8` chains several RTTs. This is the price of anti-poisoning; **0 ms once
+   cached**, so it only affects cold starts / new domains.
+2. **Overseas TCP: redsocks userspace relay** — each connection is REDIRECTed to
+   `127.0.0.1:12345`, accepted by redsocks, which opens SOCKS5 to the proxy and
+   forwards both ways. redsocks 0.5 uses **`splice()`** on Linux
+   (`redsplice_write_cb` in the log), keeping data in kernel pipes, so it is much
+   cheaper than a read/write relay. Still, it is **single-threaded epoll**, so a
+   single core caps throughput at very high (> 1 Gbps) rates. One extra hop
+   (host → proxy) is added; with the proxy on the LAN this is < 1 ms.
+3. **Concurrency (the default is a trap)** — `redsocks_conn_max` defaults to
+   `0.75 × nofile / 6` (splice); systemd's `LimitNOFILESoft=1024` means **only 128
+   concurrent connections** by default, beyond which connections are dropped. The
+   installer now writes `rlimit_nofile = 65536` + `redsocks_conn_max = 8192`
+   (tune with `--conn-max`).
+
+### When to choose something else
+
+| Need | Recommendation |
+| --- | --- |
+| Local browsing / API / normal downloads (< 1 Gbps) | This project is enough; overhead is negligible |
+| Heavy downloads, > 1 Gbps | redsocks may be single-core bound; consider a multi-threaded transparent proxy (e.g. `sing-box` tproxy) or a kernel-space setup |
+| LAN gateway (tens–hundreds of clients) | This project + `--gateway`, with a generous `--conn-max` |
+| Maximum performance, per-app config is fine | Point apps at SOCKS5 directly; skip kernel redirect + redsocks relay |
+
+Full version and reproduction script: [docs/performance.md](docs/performance.md).
 
 ## Maintenance
 
