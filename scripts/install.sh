@@ -36,6 +36,7 @@ usage() {
   --allowlist           只代理 not_cn.txt 里的 IP（默认是"中国 IP 直连"的 bypass 模式）
   --gateway             同时为局域网其它机器转发（开启 ip_forward + nat/prerouting）
   --port PORT           redsocks 本地监听端口, 默认 12345
+  --conn-max N          redsocks 最大并发连接数, 默认 8192 (会相应提高 nofile)
   -y, --yes             非交互
   -h, --help            显示帮助
 EOF
@@ -43,7 +44,7 @@ EOF
 
 PROXY=""; PROXY_TYPE=socks5; PROXY_USER=""; PROXY_PASS=""
 DIRECT_DNS=223.5.5.5; REMOTE_DNS=8.8.8.8; REMOTE_DNS2=1.1.1.1
-DNS_SPLIT=yes; TCP_REDIRECT_PORT=12345
+DNS_SPLIT=yes; TCP_REDIRECT_PORT=12345; CONN_MAX=8192
 MODE=bypass; GATEWAY=no
 
 while [ $# -gt 0 ]; do
@@ -59,6 +60,7 @@ while [ $# -gt 0 ]; do
         --allowlist)    MODE=allowlist; shift ;;
         --gateway)      GATEWAY=yes; shift ;;
         --port)         TCP_REDIRECT_PORT=$2; shift 2 ;;
+        --conn-max)     CONN_MAX=$2; shift 2 ;;
         -y|--yes)       shift ;;
         -h|--help)      usage; exit 0 ;;
         *) die "未知参数: $1" ;;
@@ -77,6 +79,10 @@ esac
 
 UNBOUND_PORT=5353
 [ "$DNS_SPLIT" = yes ] || UNBOUND_PORT=53
+
+# conn_max 默认 = 0.75*nofile/6 (splice 模式)，反推 nofile = conn_max * 8
+case "$CONN_MAX" in ''|*[!0-9]*) die "--conn-max 需要是正整数" ;; esac
+RLIMIT_NOFILE=$(( CONN_MAX * 8 ))
 
 # 网关模式需要本机对外的网卡地址
 LAN_IF=$(ip route show default 2>/dev/null | awk '{print $5; exit}' || true)
@@ -133,6 +139,8 @@ PROXY_TYPE=$PROXY_TYPE
 PROXY_USER=$PROXY_USER
 PROXY_PASS=$PROXY_PASS
 TCP_REDIRECT_PORT=$TCP_REDIRECT_PORT
+CONN_MAX=$CONN_MAX
+RLIMIT_NOFILE=$RLIMIT_NOFILE
 DNS_SPLIT=$DNS_SPLIT
 MODE=$MODE
 GATEWAY=$GATEWAY
@@ -159,6 +167,10 @@ base {
     user = redsocks;
     group = redsocks;
     redirector = iptables;
+
+    // 并发能力：不设时 nofile=1024 -> conn_max 只有 128，容易在高并发下丢连接
+    rlimit_nofile = $RLIMIT_NOFILE;
+    redsocks_conn_max = $CONN_MAX;
 }
 
 redsocks {

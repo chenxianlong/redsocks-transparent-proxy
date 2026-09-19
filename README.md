@@ -117,6 +117,16 @@ sudo bash scripts/install.sh --proxy HOST:PORT --allowlist
 - 其它机器把**默认网关**和 **DNS** 都指向本机 LAN IP
 - 若本机还有额外防火墙/安全组，记得放行 `FORWARD`
 
+## 性能
+
+- **国内流量**：只多一遍内核 nftables 集合匹配（红黑树，纳秒级），实测 redsocks **CPU 0.0 ms**，吞吐打满链路。
+- **国外流量**：redsocks 用 `splice()` 做用户态中继。实测 200 Mbps 下载仅占**单核 4.5%**，粗略单核可跑 2–4 Gbps。
+- **代价**：国外**首次** DNS 200–400 ms（命中缓存后 0 ms）；redsocks 是单线程，极高带宽时会 CPU 受限。
+- **并发**：`redsocks_conn_max` 默认只有 **128**（systemd `LimitNOFILESoft=1024` 导致），
+  安装脚本已默认调到 **8192**（`--conn-max` 可改）。
+
+详细数据与复现方法见 [docs/performance.md](docs/performance.md)。
+
 ## 维护
 
 ```bash

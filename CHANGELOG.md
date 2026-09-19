@@ -3,6 +3,15 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-09-19
+
+### Added
+
+- 性能文档 `docs/performance.md`：实测吞吐 / CPU / DNS 延迟与复现方法
+- `--conn-max` 选项；安装脚本默认写入 `rlimit_nofile = 65536`、
+  `redsocks_conn_max = 8192`（默认值只有 128，高并发下会丢连接）
+- README / README.en 增加性能小节
+
 ## [1.1.0] - 2026-09-19
 
 ### Added

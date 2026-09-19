@@ -106,6 +106,19 @@ With `--gateway`:
 - on the other machines, set **default gateway** and **DNS** to this server's LAN IP
 - make sure your firewall/security group allows `FORWARD`
 
+## Performance
+
+- **China traffic**: only one extra in-kernel nftables set lookup (rbtree, ~ns);
+  measured redsocks **CPU 0.0 ms**, line-rate throughput.
+- **Overseas traffic**: redsocks relays with `splice()`. Measured ~4.5% of one core
+  at 200 Mbps; a single core roughly handles 2–4 Gbps.
+- **Cost**: first overseas DNS lookup 200–400 ms (0 ms once cached); redsocks is
+  single-threaded, so CPU can cap very high bandwidth.
+- **Concurrency**: `redsocks_conn_max` defaults to only **128** (systemd caps
+  `LimitNOFILESoft` at 1024); the installer now sets **8192** (`--conn-max`).
+
+See [docs/performance.md](docs/performance.md) for numbers and how to reproduce.
+
 ## Maintenance
 
 ```bash
