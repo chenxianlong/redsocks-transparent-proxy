@@ -33,6 +33,8 @@ usage() {
   --remote-dns IP       国外 DNS, 默认 8.8.8.8
   --remote-dns2 IP      国外备用 DNS, 默认 1.1.1.1
   --no-dns-split        关闭国内域名分流（所有 DNS 都经代理）
+  --allowlist           只代理 not_cn.txt 里的 IP（默认是"中国 IP 直连"的 bypass 模式）
+  --gateway             同时为局域网其它机器转发（开启 ip_forward + nat/prerouting）
   --port PORT           redsocks 本地监听端口, 默认 12345
   -y, --yes             非交互
   -h, --help            显示帮助
@@ -42,6 +44,7 @@ EOF
 PROXY=""; PROXY_TYPE=socks5; PROXY_USER=""; PROXY_PASS=""
 DIRECT_DNS=223.5.5.5; REMOTE_DNS=8.8.8.8; REMOTE_DNS2=1.1.1.1
 DNS_SPLIT=yes; TCP_REDIRECT_PORT=12345
+MODE=bypass; GATEWAY=no
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -53,6 +56,8 @@ while [ $# -gt 0 ]; do
         --remote-dns)   REMOTE_DNS=$2; shift 2 ;;
         --remote-dns2)  REMOTE_DNS2=$2; shift 2 ;;
         --no-dns-split) DNS_SPLIT=no; shift ;;
+        --allowlist)    MODE=allowlist; shift ;;
+        --gateway)      GATEWAY=yes; shift ;;
         --port)         TCP_REDIRECT_PORT=$2; shift 2 ;;
         -y|--yes)       shift ;;
         -h|--help)      usage; exit 0 ;;
@@ -73,6 +78,14 @@ esac
 UNBOUND_PORT=5353
 [ "$DNS_SPLIT" = yes ] || UNBOUND_PORT=53
 
+# 网关模式需要本机对外的网卡地址
+LAN_IF=$(ip route show default 2>/dev/null | awk '{print $5; exit}' || true)
+LAN_IP=""
+if [ "$GATEWAY" = yes ] && [ -n "${LAN_IF:-}" ]; then
+    LAN_IP=$(ip -4 addr show dev "$LAN_IF" 2>/dev/null | awk '/inet /{print $2; exit}' | cut -d/ -f1 || true)
+fi
+[ "$GATEWAY" = yes ] && [ -z "$LAN_IP" ] && die "网关模式未能识别本机 IP，请检查默认路由"
+
 case "$PROXY_TYPE" in
     socks5) PSCHEME=socks5h ;;
     socks4) PSCHEME=socks4a ;;
@@ -84,6 +97,22 @@ else
     FALLBACK_PROXY="$PSCHEME://$PROXY_IP:$PROXY_PORT"
 fi
 export FALLBACK_PROXY
+
+# 监听地址：网关模式下额外监听 LAN_IP
+REDSOCKS_LOCAL_IP=127.0.0.1
+DNSMASQ_LISTEN=127.0.0.1
+UNBOUND_IFACES="    interface: 127.0.0.1"
+UNBOUND_ACL="    access-control: 127.0.0.0/8 allow"
+if [ "$GATEWAY" = yes ]; then
+    REDSOCKS_LOCAL_IP=0.0.0.0
+    DNSMASQ_LISTEN="127.0.0.1,$LAN_IP"
+    UNBOUND_IFACES="$UNBOUND_IFACES
+    interface: $LAN_IP"
+    UNBOUND_ACL="$UNBOUND_ACL
+    access-control: 10.0.0.0/8 allow
+    access-control: 172.16.0.0/12 allow
+    access-control: 192.168.0.0/16 allow"
+fi
 
 echo "==> 1/8 安装软件包"
 export DEBIAN_FRONTEND=noninteractive
@@ -105,6 +134,10 @@ PROXY_USER=$PROXY_USER
 PROXY_PASS=$PROXY_PASS
 TCP_REDIRECT_PORT=$TCP_REDIRECT_PORT
 DNS_SPLIT=$DNS_SPLIT
+MODE=$MODE
+GATEWAY=$GATEWAY
+LAN_IF=$LAN_IF
+LAN_IP=$LAN_IP
 DIRECT_DNS=$DIRECT_DNS
 REMOTE_DNS=$REMOTE_DNS
 REMOTE_DNS2=$REMOTE_DNS2
@@ -129,7 +162,7 @@ base {
 }
 
 redsocks {
-    local_ip = 127.0.0.1;
+    local_ip = $REDSOCKS_LOCAL_IP;
     local_port = $TCP_REDIRECT_PORT;
     ip = $PROXY_IP;
     port = $PROXY_PORT;
@@ -141,9 +174,9 @@ EOF
 cat > /etc/unbound/unbound.conf.d/redsocks.conf <<EOF
 # 由 redsocks-transparent-proxy 生成
 server:
-    interface: 127.0.0.1
+$UNBOUND_IFACES
     port: $UNBOUND_PORT
-    access-control: 127.0.0.0/8 allow
+$UNBOUND_ACL
     hide-identity: yes
     hide-version: yes
     do-not-query-localhost: no
@@ -159,7 +192,7 @@ if [ "$DNS_SPLIT" = yes ]; then
     cat > /etc/dnsmasq.d/redsocks.conf <<EOF
 # 由 redsocks-transparent-proxy 生成
 port=53
-listen-address=127.0.0.1
+listen-address=$DNSMASQ_LISTEN
 bind-interfaces
 no-resolv
 cache-size=10000
@@ -179,7 +212,14 @@ install -m 0755 "$SCRIPTS/gen_lists.py"             "$LIBDIR/gen_lists.py"
 install -m 0644 "$ASSETS/redsocks-nft.service"      /etc/systemd/system/redsocks-nft.service
 [ -f /etc/redsocks/direct_dst.txt ] || install -m 0644 "$ASSETS/direct_dst.txt" /etc/redsocks/direct_dst.txt
 [ -f /etc/redsocks/chnroute.txt ]   || install -m 0644 "$ASSETS/chnroute.txt"   /etc/redsocks/chnroute.txt
+[ -f /etc/redsocks/not_cn.txt ]     || install -m 0644 "$ASSETS/not_cn.txt"     /etc/redsocks/not_cn.txt
 install -m 0644 "$ROOT/README.md" "$SHAREDIR/README.md" 2>/dev/null || true
+
+if [ "$GATEWAY" = yes ]; then
+    echo "==>  开启 ip_forward"
+    printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-redsocks-transparent-proxy.conf
+    sysctl -q -w net.ipv4.ip_forward=1
+fi
 
 echo "==> 4/8 启动 redsocks"
 systemctl daemon-reload
@@ -248,10 +288,20 @@ cat <<EOF
 
 安装完成。
   代理        : $PROXY_TYPE://$PROXY_IP:$PROXY_PORT
+  模式        : $MODE
   DNS 分流    : $DNS_SPLIT
+  网关模式    : $GATEWAY${LAN_IP:+ (LAN $LAN_IP)}
   查看规则    : sudo redsocks-nft show
   更新 IP 段表: sudo redsocks-refresh
   更新域名表  : sudo redsocks-refresh-domains
   日志        : sudo tail -f /var/log/redsocks.log
   卸载        : sudo bash $ROOT/scripts/uninstall.sh
 EOF
+if [ "$GATEWAY" = yes ]; then
+    cat <<EOF
+
+网关模式提示:
+  - 其它机器把「默认网关」指向本机 ${LAN_IP}，把「DNS」也指向 ${LAN_IP}
+  - 若本机有额外防火墙/安全组，记得放行 FORWARD
+EOF
+fi

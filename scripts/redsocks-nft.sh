@@ -2,9 +2,11 @@
 # 生成 / 加载 redsocks 透明代理的 nftables 规则
 # 用法: redsocks-nft {start|stop|restart|show}
 #
-# nat/OUTPUT 链:
-#   私有/保留、代理服务器、直连白名单、中国 IP  -> RETURN 直连
-#   其余 TCP -> REDIRECT 到 redsocks 本地端口 -> SOCKS/HTTP 代理
+# 两种模式（/etc/redsocks-setup.conf 里的 MODE）:
+#   bypass    : 默认。中国 IP 直连，其余 TCP 走代理（推荐）
+#   allowlist : 只有 not_cn.txt 里的 IP 走代理，其余直连
+#
+# GATEWAY=yes 时额外生成 nat/prerouting 链，为局域网其它机器转发
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -12,7 +14,10 @@ set -euo pipefail
 
 NFT=${NFT:-/usr/sbin/nft}
 TABLE=redsocks
+MODE=${MODE:-bypass}
+GATEWAY=${GATEWAY:-no}
 CN_FILE=${CN_FILE:-/etc/redsocks/chnroute.txt}
+NOT_CN_FILE=${NOT_CN_FILE:-/etc/redsocks/not_cn.txt}
 DIRECT_FILE=${DIRECT_FILE:-/etc/redsocks/direct_dst.txt}
 GEN_FILE=${GEN_FILE:-/run/redsocks-redirect.nft}
 
@@ -23,19 +28,30 @@ TCP_REDIRECT_PORT=${TCP_REDIRECT_PORT:-12345}
 LOCAL_NETS='0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24, 192.88.99.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4'
 
 gen_ruleset() {
-    [ -r "$CN_FILE" ] || { echo "缺少中国 IP 段表: $CN_FILE (可运行 redsocks-refresh 生成)" >&2; exit 1; }
+    local list_file
+    if [ "$MODE" = allowlist ]; then
+        list_file=$NOT_CN_FILE
+        [ -r "$list_file" ] || { echo "allowlist 模式需要 $list_file (可运行 redsocks-refresh 生成)" >&2; exit 1; }
+    else
+        list_file=$CN_FILE
+        [ -r "$list_file" ] || { echo "bypass 模式需要 $list_file (可运行 redsocks-refresh 生成)" >&2; exit 1; }
+    fi
     mkdir -p "$(dirname "$GEN_FILE")"
-    python3 - "$CN_FILE" "$DIRECT_FILE" "$GEN_FILE" "$PROXY_IP" "$TCP_REDIRECT_PORT" "$LOCAL_NETS" <<'PY'
+    python3 - "$list_file" "$DIRECT_FILE" "$GEN_FILE" "$PROXY_IP" "$TCP_REDIRECT_PORT" "$LOCAL_NETS" "$MODE" "$GATEWAY" <<'PY'
 import os, sys
-cn_file, direct_file, out_file, proxy_ip, tcp_port, local_nets = sys.argv[1:7]
+
+(list_file, direct_file, out_file, proxy_ip, tcp_port,
+ local_nets, mode, gateway) = sys.argv[1:9]
 
 def load(path):
     if not path or not os.path.exists(path):
         return []
     return [l.strip() for l in open(path) if l.strip() and not l.startswith('#')]
 
-cidrs = load(cn_file)
+ips = load(list_file)
 direct = load(direct_file)
+setname = "not_cn" if mode == "allowlist" else "chnroute"
+
 
 def set_block(name, items):
     if not items:
@@ -48,27 +64,40 @@ def set_block(name, items):
             f"        elements = {{\n        {body}\n        }}\n"
             f"    }}\n\n")
 
+
+def chain(name, hook, with_local_check):
+    lines = [f"    chain {name} {{",
+             f"        type nat hook {hook} priority -100; policy accept;",
+             ""]
+    if with_local_check:
+        # 目标是本机自己的包不做 DNAT（局域网访问网关自身）
+        lines.append("        fib daddr type local return")
+    lines.append(f"        ip daddr {{ {local_nets} }} return")
+    lines.append(f"        ip daddr {proxy_ip} return")
+    if direct:
+        lines.append("        ip daddr @direct_dst return")
+    if mode == "allowlist":
+        lines.append(f"        ip daddr @{setname} meta l4proto tcp redirect to :{tcp_port}")
+    else:
+        lines.append(f"        ip daddr @{setname} return")
+        lines.append(f"        meta l4proto tcp redirect to :{tcp_port}")
+    lines.append("    }")
+    return "\n".join(lines) + "\n"
+
+
 ruleset = "table ip redsocks {\n"
-ruleset += set_block("chnroute", cidrs)
+ruleset += set_block(setname, ips)
 ruleset += set_block("direct_dst", direct)
-ruleset += f"""
-    chain output {{
-        type nat hook output priority -100; policy accept;
-
-        ip daddr {{ {local_nets} }} return
-        ip daddr {proxy_ip} return
-"""
-if direct:
-    ruleset += "        ip daddr @direct_dst return\n"
-ruleset += f"""        ip daddr @chnroute return
-
-        meta l4proto tcp redirect to :{tcp_port}
-    }}
-}}
-"""
+ruleset += "\n"
+ruleset += chain("output", "output", with_local_check=False)
+if gateway == "yes":
+    ruleset += "\n"
+    ruleset += chain("prerouting", "prerouting", with_local_check=True)
+ruleset += "}\n"
 
 open(out_file, "w").write(ruleset)
-print(f"[redsocks-nft] 生成规则: {out_file} (中国段 {len(cidrs)} 条, 直连白名单 {len(direct)} 条)")
+print(f"[redsocks-nft] 生成规则: {out_file} "
+      f"(模式 {mode}, {setname} {len(ips)} 条, 直连白名单 {len(direct)} 条, 网关 {gateway})")
 PY
 }
 

@@ -31,7 +31,12 @@ Routes a Linux server's traffic as follows:
 ## Install
 
 ```bash
+# from a clone
 sudo bash scripts/install.sh --proxy HOST:PORT
+
+# or one-liner (no clone)
+curl -fsSL https://raw.githubusercontent.com/chenxianlong/redsocks-transparent-proxy/main/install.sh \
+  | sudo bash -s -- --proxy HOST:PORT
 ```
 
 Common options:
@@ -44,6 +49,8 @@ Common options:
 | `--direct-dns` | domestic DNS | `223.5.5.5` |
 | `--remote-dns` / `--remote-dns2` | foreign DNS (queried over TCP via proxy) | `8.8.8.8` / `1.1.1.1` |
 | `--no-dns-split` | route *all* DNS through the proxy | off |
+| `--allowlist` | only proxy IPs in `not_cn.txt` (default is China-bypass) | off |
+| `--gateway` | also forward for the LAN (`ip_forward` + `nat/prerouting`) | off |
 | `--port` | redsocks local port | `12345` |
 
 Example:
@@ -51,6 +58,16 @@ Example:
 ```bash
 sudo bash scripts/install.sh --proxy 10.0.0.1:1080 --type socks5 --yes
 ```
+
+Routing modes:
+
+- **bypass** (default): China IPs (`chnroute.txt`) are excluded; everything else is
+  proxied. Recommended.
+- **allowlist** (`--allowlist`): only IPs in `not_cn.txt` are proxied.
+
+Gateway mode (`--gateway`, experimental): enables `ip_forward`, adds a
+`nat/prerouting` chain and makes redsocks/`dnsmasq`/`unbound` listen on the LAN
+IP so other machines can use this host as gateway + DNS.
 
 ## Verify
 

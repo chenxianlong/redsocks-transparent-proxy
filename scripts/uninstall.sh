@@ -42,7 +42,8 @@ rm -f /etc/systemd/system/redsocks-nft.service \
       /usr/local/lib/redsocks-transparent-proxy/gen_lists.py \
       /usr/local/share/redsocks-transparent-proxy/README.md \
       /etc/redsocks/chnroute.txt /etc/redsocks/not_cn.txt /etc/redsocks/direct_dst.txt \
-      /etc/redsocks-setup.conf /var/log/redsocks.log
+      /etc/redsocks-setup.conf /etc/sysctl.d/99-redsocks-transparent-proxy.conf \
+      /var/log/redsocks.log
 rmdir /usr/local/lib/redsocks-transparent-proxy /usr/local/share/redsocks-transparent-proxy /etc/redsocks 2>/dev/null || true
 systemctl daemon-reload
 

@@ -1,0 +1,40 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning install.sh scripts/*.sh
+
+      - name: Python syntax
+        run: python3 -m py_compile scripts/gen_lists.py
+
+      - name: Validate nftables ruleset (syntax)
+        run: |
+          sudo apt-get install -y -qq nftables
+          chmod +x scripts/redsocks-nft.sh
+          PROXY_IP=192.0.2.10 \
+          CN_FILE=assets/chnroute.txt \
+          NOT_CN_FILE=assets/not_cn.txt \
+          DIRECT_FILE=assets/direct_dst.txt \
+          GEN_FILE=/tmp/bypass.nft NFT=/bin/true \
+            bash scripts/redsocks-nft.sh start
+          MODE=allowlist GATEWAY=yes \
+          PROXY_IP=192.0.2.10 \
+          CN_FILE=assets/chnroute.txt \
+          NOT_CN_FILE=assets/not_cn.txt \
+          DIRECT_FILE=assets/direct_dst.txt \
+          GEN_FILE=/tmp/gateway.nft NFT=/bin/true \
+            bash scripts/redsocks-nft.sh start
+          sudo nft -c -f /tmp/bypass.nft
+          sudo nft -c -f /tmp/gateway.nft

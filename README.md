@@ -3,10 +3,12 @@
 在**中国大陆的 Linux 服务器**上做透明分流：
 
 - 访问**国外**（非中国 IP）的 TCP 流量 → 经 SOCKS5/HTTP 代理出去
-- **中国 IP** 直连（国内的网站/服务速度快）
-- **DNS 按域名分流**：国内域名走国内 DNS 直连，国外域名经代理用 TCP 解析，**规避 DNS 污染**
+- **中国 IP** 直连（国内网站/服务速度快、走国内 CDN）
+- **DNS 按域名分流**：国内域名走国内 DNS 直连，国外域名经代理用 **TCP** 解析，**规避 DNS 污染**
 
 基于 `redsocks` + `nftables` + `dnsmasq` + `unbound`，纯内核转发，无需改应用配置。
+
+English: [README.en.md](README.en.md) · 变更记录: [CHANGELOG.md](CHANGELOG.md)
 
 ## 架构
 
@@ -15,7 +17,7 @@
  ├─ DNS → 127.0.0.1:53 (dnsmasq)
  │         ├─ 中国域名(11万条表 + .cn) ──→ 223.5.5.5  (UDP 直连)
  │         └─ 其它域名 ──→ 127.0.0.1:5353 (unbound)
- │                              └─ 上游 TCP 8.8.8.8/1.1.1.1:53
+ │                              └─ 上游 TCP 8.8.8.8/1.1.1.1:53（经代理）
  └─ TCP
        ▼
    nftables (nat/OUTPUT, table ip redsocks)
@@ -34,11 +36,24 @@
 
 ## 安装
 
+方式一，克隆后安装：
+
 ```bash
-sudo bash scripts/install.sh --proxy HOST:PORT
+git clone https://github.com/chenxianlong/redsocks-transparent-proxy
+sudo bash redsocks-transparent-proxy/scripts/install.sh --proxy HOST:PORT
 ```
 
-常用参数：
+方式二，一行安装（无需克隆）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chenxianlong/redsocks-transparent-proxy/main/install.sh \
+  | sudo bash -s -- --proxy HOST:PORT
+```
+
+> 若 `raw.githubusercontent.com` 被墙，请先通过代理或镜像 clone 仓库，再执行
+> `sudo bash scripts/install.sh --proxy HOST:PORT`。
+
+### 参数
 
 | 参数 | 说明 | 默认 |
 | --- | --- | --- |
@@ -48,12 +63,19 @@ sudo bash scripts/install.sh --proxy HOST:PORT
 | `--direct-dns` | 国内 DNS | `223.5.5.5` |
 | `--remote-dns` / `--remote-dns2` | 国外 DNS（经代理 TCP 查询） | `8.8.8.8` / `1.1.1.1` |
 | `--no-dns-split` | 所有 DNS 都走代理 | 关闭 |
+| `--allowlist` | 只代理 `not_cn.txt` 里的 IP（默认是「中国 IP 直连」的 bypass 模式） | 关闭 |
+| `--gateway` | 同时为局域网其它机器转发（`ip_forward` + `nat/prerouting`） | 关闭 |
 | `--port` | redsocks 本地端口 | `12345` |
 
-示例：
-
 ```bash
-sudo bash scripts/install.sh --proxy 10.0.0.1:1080 --type socks5 --yes
+# 最常见
+sudo bash scripts/install.sh --proxy 10.0.0.1:1080 --yes
+
+# 带认证
+sudo bash scripts/install.sh --proxy 10.0.0.1:1080 --user me --pass secret
+
+# 同时做局域网网关
+sudo bash scripts/install.sh --proxy 10.0.0.1:1080 --gateway
 ```
 
 ## 验证
@@ -68,6 +90,27 @@ dig +short @127.0.0.1 www.google.com     # 真实 IP
 
 sudo redsocks-nft show
 ```
+
+## 两种分流模式
+
+- **bypass（默认，推荐）**：把中国 IP 段表 `chnroute.txt` 作为排除集。不在表内的
+  （即国外 IP）一律走代理。漏掉的国内 IP 最多多走一次代理，不会导致国外站点直连失败。
+- **allowlist**：只把 `not_cn.txt` 里列出的（已分配的）国外 IP 走代理。
+  适合你想严格控制「哪些目标走代理」的场景。
+
+```bash
+sudo bash scripts/install.sh --proxy HOST:PORT --allowlist
+```
+
+## 网关模式（实验性）
+
+加 `--gateway` 后：
+
+- `net.ipv4.ip_forward=1`（持久化到 `/etc/sysctl.d/99-redsocks-transparent-proxy.conf`）
+- 额外生成 `nat/prerouting` 链，把其它机器转发进来的「非中国 TCP」重定向到 redsocks
+- `redsocks` 监听 `0.0.0.0`；`dnsmasq`/`unbound` 额外监听本机 LAN IP
+- 其它机器把**默认网关**和 **DNS** 都指向本机 LAN IP
+- 若本机还有额外防火墙/安全组，记得放行 `FORWARD`
 
 ## 维护
 
@@ -92,7 +135,8 @@ sudo bash scripts/uninstall.sh --purge   # 连同 redsocks/unbound/dnsmasq 一�
 入口是 [`SKILL.md`](SKILL.md)。可放到：
 
 ```bash
-git clone <repo> ~/.agents/skills/redsocks-transparent-proxy
+git clone https://github.com/chenxianlong/redsocks-transparent-proxy \
+  ~/.agents/skills/redsocks-transparent-proxy
 # 或 ~/.pi/agent/skills/ 、 ~/.claude/skills/
 ```
 
@@ -107,6 +151,8 @@ git clone <repo> ~/.agents/skills/redsocks-transparent-proxy
    要停就整套停，或把 `/etc/resolv.conf` 改回 `223.5.5.5`。
 4. **ICMP 不会被代理**，`ping` 墙外地址仍然不通，redsocks 只处理 TCP。
 5. 检测 SOCKS5 UDP relay 时注意回复源端口可能不同，要用**未 connect** 的 socket 看。
+
+更多细节见 [references/troubleshooting.md](references/troubleshooting.md)。
 
 ## 数据来源
 
