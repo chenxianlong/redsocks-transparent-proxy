@@ -1,0 +1,18 @@
+--- a/utils.c
++++ b/utils.c
+@@ -117,11 +117,11 @@
+ 
+ char *redsocks_evbuffer_readline(struct evbuffer *buf)
+ {
+-#if _EVENT_NUMERIC_VERSION >= 0x02000000
++	/* libevent 2.x headers do not always define _EVENT_NUMERIC_VERSION (e.g.
++	 * Rocky/RHEL 10).  The legacy evbuffer_readline() swallows the CRLF blank
++	 * line that ends a CONNECT reply, so http-connect waits forever for the
++	 * tunnel and the connection hangs.  Always use evbuffer_readln(). */
+ 	return evbuffer_readln(buf, NULL, EVBUFFER_EOL_CRLF);
+-#else
+-	return evbuffer_readline(buf);
+-#endif
+ }
+ 
+ struct bufferevent* red_connect_relay(struct sockaddr_in *addr, evbuffercb writecb, everrorcb errorcb, void *cbarg)
