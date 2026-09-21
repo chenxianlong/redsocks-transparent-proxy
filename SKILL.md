@@ -2,7 +2,7 @@
 name: redsocks-transparent-proxy
 description: Set up transparent split routing on a Linux server (mainland China) so that non-China TCP traffic is forwarded through a SOCKS5/HTTP proxy while China traffic stays direct, with domain-split DNS (dnsmasq + unbound over TCP) to defeat DNS poisoning. Use when asked to route a server's foreign traffic through a proxy, transparently bypass the GFW, keep domestic traffic fast, or configure redsocks/nftables for split tunneling.
 license: MIT
-compatibility: Debian 12/13 or Ubuntu 22.04+, systemd, nftables, root access, outbound internet.
+compatibility: Debian 12/13 or Ubuntu 22.04+, or RHEL/CentOS/Rocky/Alma/Fedora (redsocks built from source); systemd, nftables, root access, outbound internet.
 metadata:
   author: chenxianlong
   repository: https://github.com/chenxianlong/redsocks-transparent-proxy
@@ -23,7 +23,10 @@ Routes a Linux server's traffic as follows:
 
 ## Prerequisites
 
-- Debian/Ubuntu with `systemd`, `nftables` (`/usr/sbin/nft`), `python3`, `curl`.
+- Linux with `systemd`, `nftables` (`/usr/sbin/nft`), `python3`, `curl`.
+  - Debian/Ubuntu: `redsocks` comes from the distro package.
+  - RHEL/CentOS/Rocky/Alma/Fedora: the installer builds `redsocks` 0.5 from
+    source (`scripts/redsocks-build.sh`) and applies a required CRLF patch.
 - Root access.
 - A working SOCKS5 (or HTTP CONNECT) proxy. Verify first:
   `curl -x socks5h://HOST:PORT -sI https://www.google.com`
@@ -52,6 +55,7 @@ Common options:
 | `--allowlist` | only proxy IPs in `not_cn.txt` (default is China-bypass) | off |
 | `--gateway` | also forward for the LAN (`ip_forward` + `nat/prerouting`) | off |
 | `--port` | redsocks local port | `12345` |
+| `--splice` | `on` / `off`, redsocks data pump | Debian=`on`, RHEL-family=`off` |
 
 Example:
 
@@ -102,6 +106,19 @@ sudo bash scripts/uninstall.sh          # keep packages
 sudo bash scripts/uninstall.sh --purge  # also remove redsocks/unbound/dnsmasq
 ```
 
+## Platform notes (RHEL-family)
+
+The installer handles these automatically; listed here for operators/debugging:
+
+| Topic | Debian/Ubuntu | RHEL/CentOS/Rocky/Alma |
+| --- | --- | --- |
+| redsocks | distro package | built from source into `/usr/sbin/redsocks` |
+| systemd unit | distro unit, `daemon=on` | generated `Type=simple`, `daemon=off` |
+| data pump | `splice` on | `splice` off (buffer pump) |
+| unbound config | `/etc/unbound/unbound.conf.d/` | `/etc/unbound/conf.d/` |
+| SELinux | usually off | `Enforcing` may block non-53 bind -> `dns_port_t` label |
+| DNS takeover | systemd-resolved stub or nmcli | NetworkManager via `nmcli` |
+
 ## Critical pitfalls (do not repeat these)
 
 1. **Do not use redsocks `redudp` for DNS with a clash/mihomo-style proxy.**
@@ -117,5 +134,18 @@ sudo bash scripts/uninstall.sh --purge  # also remove redsocks/unbound/dnsmasq
    handles TCP.
 5. When testing a UDP relay, remember replies may come from a different source
    port; use an *unconnected* socket to observe them.
+6. **`redsocks 0.5` `daemon = on` can die under systemd.** If the fork/setsid
+   path exits without leaving a process, switch to `daemon = off` with
+   `Type=simple` and no `PIDFile` (the RHEL installer does this).
+7. **`redsocks_evbuffer_readline()` may use the legacy `evbuffer_readline()`**
+   when `_EVENT_NUMERIC_VERSION` is undefined (common with libevent 2.1 headers).
+   It swallows the CRLF blank line that ends a CONNECT reply, so `http-connect`
+   hangs forever after a `200 Connection established`. The source build applies
+   `scripts/patches/redsocks-0.5-evbuffer-readline.patch` to force
+   `evbuffer_readln(EVBUFFER_EOL_CRLF)`.
+8. **SELinux blocks non-53 DNS ports.** `unbound` runs as `named_t`, which is
+   only allowed to bind `dns_port_t` (53, 853). Binding `5353` fails with
+   `Permission denied`. Label it:
+   `semanage port -a -t dns_port_t -p tcp 5353` (and `-p udp`).
 
 See [references/troubleshooting.md](references/troubleshooting.md) for details.

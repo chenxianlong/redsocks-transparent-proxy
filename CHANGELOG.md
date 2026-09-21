@@ -3,6 +3,28 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.0] - 2026-09-21
+
+### Added
+
+- **RHEL 系支持**：RHEL / CentOS / Rocky / Alma / Fedora。安装脚本自动识别发行版，
+  RHEL 系在仓库无 `redsocks` 软件包时从源码编译（`scripts/redsocks-build.sh`）
+- `scripts/patches/redsocks-0.5-evbuffer-readline.patch`：修复 http-connect 在
+  未定义 `_EVENT_NUMERIC_VERSION` 的 libevent 上把 CONNECT 响应尾部 `\r\n\r\n`
+  一次吞掉、导致隧道卡死的严重 bug
+- 新增 `--splice on|off` 选项（RHEL 系默认 `off`，buffer pump 更稳）
+- RHEL 系自动创建 `redsocks.service`（`Type=simple` + `daemon = off`）
+- RHEL 系自动处理 SELinux：为非 53 端口（unbound `5353`）打 `dns_port_t` 标签
+- unbound 配置目录按发行版区分（Debian `unbound.conf.d/`，RHEL `conf.d/`）
+- 新增 `docs/platform-support.md`：平台差异、发行版适配与踩坑记录
+
+### Changed
+
+- `scripts/install.sh` 重构为多发行版：包管理器（`apt`/`dnf`）、redsocks 获取方式、
+  systemd unit、unbound 路径、SELinux、DNS 接管全部按发行版分支
+- `scripts/uninstall.sh` 同时支持 `apt`/`dnf`，并撤销 SELinux 端口标签
+- README / README.en / SKILL 更新环境要求与平台矩阵
+
 ## [1.2.0] - 2026-09-19
 
 ### Added
