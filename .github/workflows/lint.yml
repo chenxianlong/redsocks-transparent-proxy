@@ -19,6 +19,12 @@ jobs:
       - name: Python syntax
         run: python3 -m py_compile scripts/gen_lists.py docs/architecture.py
 
+      - name: Verify redsocks CRLF patch applies
+        run: |
+          curl -fsSL https://github.com/darkk/redsocks/archive/refs/tags/release-0.5.tar.gz | tar xz
+          cd redsocks-release-0.5
+          patch -p1 --dry-run < ../scripts/patches/redsocks-0.5-evbuffer-readline.patch
+
       - name: Validate nftables ruleset (syntax)
         run: |
           sudo apt-get install -y -qq nftables

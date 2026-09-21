@@ -118,3 +118,59 @@ unshare -rn /usr/sbin/nft -c -f /tmp/ruleset.nft     # syntax check in a netns
 - China IPv4: `https://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest`
 - All regions: ARIN / RIPE NCC / LACNIC / AFRINIC `delegated-*-latest`
 - China domains: `https://github.com/felixonmars/dnsmasq-china-list`
+
+## 9. RHEL family: no `redsocks` package
+
+On RHEL/CentOS/Rocky/Alma 8/9/10 `redsocks` is not shipped (EPEL dropped it for
+EL10). The installer builds release 0.5 from source via
+`scripts/redsocks-build.sh`. It needs `gcc make libevent-devel patch` and network
+access to fetch the tarball (falls back to the `--proxy` when direct GitHub is
+blocked). The built binary lands in `/usr/sbin/redsocks`; the `redsocks`
+system user is created automatically.
+
+## 10. RHEL family: `redsocks` `daemon = on` dies under systemd
+
+With `daemon = on`, redsocks `setuid`s to `redsocks` **before** `fork()` and the
+child can exit during daemonization, leaving `systemd` stuck in `activating` with
+no PID file:
+
+```
+redsocks.service: Can't open PID file '/run/redsocks/redsocks.pid' (yet?) after start
+```
+
+Fix: run in the foreground (`daemon = off`) with a generated unit:
+
+```ini
+[Service]
+Type=simple
+ExecStart=/usr/sbin/redsocks -c /etc/redsocks.conf
+```
+
+The installer writes this unit on RHEL-family hosts.
+
+## 11. RHEL family: SELinux blocks unbound on the split-DNS port
+
+`unbound` runs as `named_t`, which may only bind `dns_port_t` (53, 853). With the
+split design unbound listens on `5353`, so it fails:
+
+```
+error: can't bind socket: Permission denied for 127.0.0.1 port 5353
+avc: denied { name_bind } ... scontext=system_u:system_r:named_t:s0
+    tcontext=system_u:object_r:unreserved_port_t:s0 tclass=tcp_socket
+```
+
+Fix (persistent):
+
+```bash
+sudo semanage port -a -t dns_port_t -p tcp 5353
+sudo semanage port -a -t dns_port_t -p udp 5353
+```
+
+(requires `policycoreutils-python-utils`). The installer does this automatically
+when SELinux is `Enforcing`.
+
+## 12. RHEL family: unbound include directory
+
+Debian's `unbound` includes `/etc/unbound/unbound.conf.d/*.conf`; RHEL's includes
+`/etc/unbound/conf.d/*.conf`. Writing to the wrong directory silently does
+nothing. The installer picks the right one per distro.

@@ -34,10 +34,21 @@ English: [README.en.md](README.en.md) · 变更记录: [CHANGELOG.md](CHANGELOG.
 
 ## 环境要求
 
-- Debian 12/13 或 Ubuntu 22.04+（systemd + nftables + python3 + curl）
+- **操作系统**（自动识别）：
+
+  | 发行版 | redsocks 来源 | 备注 |
+  | --- | --- | --- |
+  | Debian 12/13、Ubuntu 22.04+ | 软件包 `redsocks` | 原支持平台 |
+  | RHEL / CentOS / Rocky / Alma / Fedora | **从源码编译** | 自动应用 CRLF 修复补丁 |
+
+- `systemd` + `nftables` + `python3` + `curl`
 - root 权限
 - 一个可用的 SOCKS5 / HTTP 代理，先自测：
   `curl -x socks5h://HOST:PORT -sI https://www.google.com`
+
+> RHEL 系会在安装时用 `dnf` 安装编译依赖（`gcc make libevent-devel patch`），
+> 并在 SELinux 为 `Enforcing` 时自动为 unbound 的非 53 端口打 `dns_port_t` 标签。
+> 详见 [`docs/platform-support.md`](docs/platform-support.md)。
 
 ## 安装
 
@@ -57,6 +68,9 @@ curl -fsSL https://raw.githubusercontent.com/chenxianlong/redsocks-transparent-p
 
 > 若 `raw.githubusercontent.com` 被墙，请先通过代理或镜像 clone 仓库，再执行
 > `sudo bash scripts/install.sh --proxy HOST:PORT`。
+>
+> 在 RHEL / CentOS / Rocky / Alma 上无需额外操作：脚本会自动 `dnf` 安装依赖、
+> 从源码编译 redsocks、生成 systemd unit，并处理 SELinux。
 
 ### 参数
 
@@ -71,6 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/chenxianlong/redsocks-transparent-p
 | `--allowlist` | 只代理 `not_cn.txt` 里的 IP（默认是「中国 IP 直连」的 bypass 模式） | 关闭 |
 | `--gateway` | 同时为局域网其它机器转发（`ip_forward` + `nat/prerouting`） | 关闭 |
 | `--port` | redsocks 本地端口 | `12345` |
+| `--splice` | `on` / `off`，redsocks 数据泵开关 | Debian=`on`，RHEL 系=`off` |
 
 ```bash
 # 最常见

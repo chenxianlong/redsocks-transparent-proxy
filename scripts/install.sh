@@ -1,10 +1,14 @@
 #!/bin/bash
 # redsocks-transparent-proxy 安装脚本
 #
-# 目标：Linux 服务器（Debian/Ubuntu 优先）
+# 目标：Linux 服务器
 #   - 访问国外（非中国 IP）的 TCP 流量经 SOCKS/HTTP 代理出去
 #   - 中国 IP 直连
 #   - DNS 按域名分流：国内域名走国内 DNS，国外域名经代理解析（防污染）
+#
+# 支持发行版：
+#   - Debian 12/13、Ubuntu 22.04+（redsocks 由软件包提供）
+#   - RHEL / CentOS / Rocky / Alma / Fedora 等（redsocks 从源码编译）
 #
 # 用法: sudo bash scripts/install.sh --proxy HOST:PORT [选项]
 set -euo pipefail
@@ -37,6 +41,8 @@ usage() {
   --gateway             同时为局域网其它机器转发（开启 ip_forward + nat/prerouting）
   --port PORT           redsocks 本地监听端口, 默认 12345
   --conn-max N          redsocks 最大并发连接数, 默认 8192 (会相应提高 nofile)
+  --splice on|off       是否使用 redsocks splice 数据泵
+                        （默认: Debian=on, RHEL 系=off；RHEL 上 off 更稳）
   -y, --yes             非交互
   -h, --help            显示帮助
 EOF
@@ -45,7 +51,7 @@ EOF
 PROXY=""; PROXY_TYPE=socks5; PROXY_USER=""; PROXY_PASS=""
 DIRECT_DNS=223.5.5.5; REMOTE_DNS=8.8.8.8; REMOTE_DNS2=1.1.1.1
 DNS_SPLIT=yes; TCP_REDIRECT_PORT=12345; CONN_MAX=8192
-MODE=bypass; GATEWAY=no
+MODE=bypass; GATEWAY=no; SPLICE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -61,6 +67,7 @@ while [ $# -gt 0 ]; do
         --gateway)      GATEWAY=yes; shift ;;
         --port)         TCP_REDIRECT_PORT=$2; shift 2 ;;
         --conn-max)     CONN_MAX=$2; shift 2 ;;
+        --splice)       SPLICE=$2; shift 2 ;;
         -y|--yes)       shift ;;
         -h|--help)      usage; exit 0 ;;
         *) die "未知参数: $1" ;;
@@ -76,6 +83,36 @@ case "$PROXY_TYPE" in
     socks5|socks4|http-connect|http-relay) ;;
     *) die "不支持的 --type: $PROXY_TYPE" ;;
 esac
+
+# ---- 检测发行版 ----
+DISTRO_FAMILY=""
+DISTRO_NAME="unknown"
+if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    DISTRO_NAME=${PRETTY_NAME:-${ID:-unknown}}
+    case " ${ID:-} ${ID_LIKE:-} " in
+        *" debian "*|*" ubuntu "*) DISTRO_FAMILY=debian ;;
+        *" rhel "*|*" fedora "*|*" centos "*|*" rocky "*|*" alma "*) DISTRO_FAMILY=rhel ;;
+    esac
+fi
+[ -n "$DISTRO_FAMILY" ] || die "无法识别的发行版: $DISTRO_NAME（仅支持 Debian/Ubuntu 与 RHEL/CentOS/Rocky/Alma）"
+echo "==> 发行版: $DISTRO_NAME (family=$DISTRO_FAMILY)"
+
+# ---- 各发行版差异 ----
+# redsocks: Debian 由软件包提供且 daemon 化；RHEL 系从源码编译、前台运行
+UNBOUND_CONF_DIR=/etc/unbound/unbound.conf.d
+REDSOCKS_DAEMON=on
+SPLICE_DEFAULT=on
+NEED_BUILD_REDSOCKS=no
+if [ "$DISTRO_FAMILY" = rhel ]; then
+    UNBOUND_CONF_DIR=/etc/unbound/conf.d
+    REDSOCKS_DAEMON=off
+    SPLICE_DEFAULT=off
+    NEED_BUILD_REDSOCKS=yes
+fi
+[ -n "$SPLICE" ] || SPLICE=$SPLICE_DEFAULT
+case "$SPLICE" in on|off) ;; *) die "--splice 只能是 on 或 off" ;; esac
 
 UNBOUND_PORT=5353
 [ "$DNS_SPLIT" = yes ] || UNBOUND_PORT=53
@@ -120,19 +157,33 @@ if [ "$GATEWAY" = yes ]; then
     access-control: 192.168.0.0/16 allow"
 fi
 
-echo "==> 1/8 安装软件包"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-PKGS="redsocks unbound"
-[ "$DNS_SPLIT" = yes ] && PKGS="$PKGS dnsmasq"
-# shellcheck disable=SC2086
-apt-get install -y -qq $PKGS
+echo "==> 1/9 安装软件包"
+if [ "$DISTRO_FAMILY" = debian ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    PKGS="redsocks unbound"
+    [ "$DNS_SPLIT" = yes ] && PKGS="$PKGS dnsmasq"
+    # shellcheck disable=SC2086
+    apt-get install -y -qq $PKGS
+else
+    PKGS="unbound"
+    [ "$DNS_SPLIT" = yes ] && PKGS="$PKGS dnsmasq"
+    # shellcheck disable=SC2086
+    dnf install -y -q $PKGS
+fi
 [ "$DNS_SPLIT" = yes ] && { systemctl stop dnsmasq 2>/dev/null || true; }
 
-echo "==> 2/8 写入配置"
-install -d -m 0755 /etc/redsocks "$LIBDIR" "$SHAREDIR" /etc/unbound/unbound.conf.d /etc/dnsmasq.d
+if [ "$NEED_BUILD_REDSOCKS" = yes ] && ! command -v redsocks >/dev/null 2>&1; then
+    echo "==> 1b/9 RHEL 系无 redsocks 软件包，从源码编译"
+    bash "$SCRIPTS/redsocks-build.sh" --proxy "$FALLBACK_PROXY"
+fi
+command -v redsocks >/dev/null 2>&1 || [ -x /usr/sbin/redsocks ] || die "redsocks 不可用"
+
+echo "==> 2/9 写入配置"
+install -d -m 0755 /etc/redsocks "$LIBDIR" "$SHAREDIR" "$UNBOUND_CONF_DIR"
 cat > "$CONF" <<EOF
 # redsocks-transparent-proxy 生成，勿手工改动（如需改代理请重跑 install.sh）
+DISTRO_FAMILY=$DISTRO_FAMILY
 PROXY_IP=$PROXY_IP
 PROXY_PORT=$PROXY_PORT
 PROXY_TYPE=$PROXY_TYPE
@@ -149,6 +200,7 @@ LAN_IP=$LAN_IP
 DIRECT_DNS=$DIRECT_DNS
 REMOTE_DNS=$REMOTE_DNS
 REMOTE_DNS2=$REMOTE_DNS2
+UNBOUND_PORT=$UNBOUND_PORT
 EOF
 chmod 600 "$CONF"
 
@@ -157,13 +209,16 @@ if [ -n "$PROXY_USER" ]; then
     AUTH="    login = \"$PROXY_USER\";
     password = \"$PROXY_PASS\";"
 fi
+SPLICE_LINE=""
+# RHEL 系默认关闭 splice：http-connect 握手期间客户端先发的数据更稳妥
+[ "$SPLICE" = off ] && SPLICE_LINE="    splice = off;"
 cat > /etc/redsocks.conf <<EOF
-// 由 redsocks-transparent-proxy 生成
+// 由 redsocks-transparent-proxy 生成 (family=$DISTRO_FAMILY)
 base {
     log_debug = off;
     log_info = on;
     log = "file:/var/log/redsocks.log";
-    daemon = on;
+    daemon = $REDSOCKS_DAEMON;
     user = redsocks;
     group = redsocks;
     redirector = iptables;
@@ -180,11 +235,14 @@ redsocks {
     port = $PROXY_PORT;
     type = $PROXY_TYPE;
 $AUTH
+$SPLICE_LINE
 }
 EOF
+# 去掉可能出现的空行尾随
+sed -i '/^$/N;/^\n$/D' /etc/redsocks.conf
 
-cat > /etc/unbound/unbound.conf.d/redsocks.conf <<EOF
-# 由 redsocks-transparent-proxy 生成
+cat > "$UNBOUND_CONF_DIR/redsocks.conf" <<EOF
+# 由 redsocks-transparent-proxy 生成 (family=$DISTRO_FAMILY)
 server:
 $UNBOUND_IFACES
     port: $UNBOUND_PORT
@@ -202,7 +260,7 @@ EOF
 
 if [ "$DNS_SPLIT" = yes ]; then
     cat > /etc/dnsmasq.d/redsocks.conf <<EOF
-# 由 redsocks-transparent-proxy 生成
+# 由 redsocks-transparent-proxy 生成 (family=$DISTRO_FAMILY)
 port=53
 listen-address=$DNSMASQ_LISTEN
 bind-interfaces
@@ -216,7 +274,20 @@ else
     rm -f /etc/dnsmasq.d/redsocks.conf /etc/dnsmasq.d/china-domains.conf
 fi
 
-echo "==> 3/8 安装脚本与资源"
+# SELinux：unbound 默认只被允许绑定 53/853，非 53 端口需要打 DNS 端口标签
+if [ "$DISTRO_FAMILY" = rhel ] && command -v getenforce >/dev/null 2>&1 \
+   && [ "$(getenforce 2>/dev/null || echo Disabled)" = Enforcing ]; then
+    if [ "$UNBOUND_PORT" != 53 ]; then
+        echo "==> 2b/9 SELinux: 允许 unbound 绑定端口 $UNBOUND_PORT"
+        command -v semanage >/dev/null 2>&1 || dnf install -y -q policycoreutils-python-utils
+        semanage port -a -t dns_port_t -p tcp "$UNBOUND_PORT" 2>/dev/null \
+            || semanage port -m -t dns_port_t -p tcp "$UNBOUND_PORT" 2>/dev/null || true
+        semanage port -a -t dns_port_t -p udp "$UNBOUND_PORT" 2>/dev/null \
+            || semanage port -m -t dns_port_t -p udp "$UNBOUND_PORT" 2>/dev/null || true
+    fi
+fi
+
+echo "==> 3/9 安装脚本与资源"
 install -m 0755 "$SCRIPTS/redsocks-nft.sh"          "$SBINDIR/redsocks-nft"
 install -m 0755 "$SCRIPTS/refresh-lists.sh"         "$SBINDIR/redsocks-refresh"
 install -m 0755 "$SCRIPTS/refresh-china-domains.sh" "$SBINDIR/redsocks-refresh-domains"
@@ -227,25 +298,44 @@ install -m 0644 "$ASSETS/redsocks-nft.service"      /etc/systemd/system/redsocks
 [ -f /etc/redsocks/not_cn.txt ]     || install -m 0644 "$ASSETS/not_cn.txt"     /etc/redsocks/not_cn.txt
 install -m 0644 "$ROOT/README.md" "$SHAREDIR/README.md" 2>/dev/null || true
 
+# RHEL 系自建 systemd unit（软件包不提供），前台运行 + Type=simple 更稳
+if [ "$DISTRO_FAMILY" = rhel ]; then
+    cat > /etc/systemd/system/redsocks.service <<'EOF'
+[Unit]
+Description=Transparent redirector of any TCP connection to proxy (redsocks)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/redsocks -t -c /etc/redsocks.conf
+ExecStart=/usr/sbin/redsocks -c /etc/redsocks.conf
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
+
 if [ "$GATEWAY" = yes ]; then
     echo "==>  开启 ip_forward"
     printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-redsocks-transparent-proxy.conf
     sysctl -q -w net.ipv4.ip_forward=1
 fi
 
-echo "==> 4/8 启动 redsocks"
+echo "==> 4/9 启动 redsocks"
 systemctl daemon-reload
 systemctl enable redsocks >/dev/null 2>&1 || true
 systemctl restart redsocks
 sleep 1
 systemctl is-active --quiet redsocks || die "redsocks 启动失败: journalctl -u redsocks -n50"
 
-echo "==> 5/8 加载 nftables 规则"
+echo "==> 5/9 加载 nftables 规则"
 systemctl enable redsocks-nft >/dev/null 2>&1 || true
 systemctl restart redsocks-nft
 systemctl is-active --quiet redsocks-nft || die "规则加载失败: journalctl -u redsocks-nft -n50"
 
-echo "==> 6/8 启动 unbound (127.0.0.1:$UNBOUND_PORT, 上游 TCP 经代理)"
+echo "==> 6/9 启动 unbound (127.0.0.1:$UNBOUND_PORT, 上游 TCP 经代理)"
 unbound-checkconf || die "unbound 配置有误"
 systemctl enable unbound >/dev/null 2>&1 || true
 systemctl restart unbound
@@ -255,7 +345,7 @@ echo -n "    经代理解析 www.google.com -> "
 timeout 15 dig +short @127.0.0.1 -p "$UNBOUND_PORT" www.google.com | grep -E '^[0-9]' | head -3 | tr '\n' ' '; echo
 
 if [ "$DNS_SPLIT" = yes ]; then
-    echo "==> 7/8 生成中国域名表并启动 dnsmasq (127.0.0.1:53)"
+    echo "==> 7/9 生成中国域名表并启动 dnsmasq (127.0.0.1:53)"
     if ! /usr/local/sbin/redsocks-refresh-domains; then
         echo "    下载失败，使用最小回落表(仅 .cn)"
         printf 'server=/.cn/%s\n' "$DIRECT_DNS" > /etc/dnsmasq.d/china-domains.conf
@@ -266,10 +356,10 @@ if [ "$DNS_SPLIT" = yes ]; then
     sleep 1
     systemctl is-active --quiet dnsmasq || die "dnsmasq 启动失败: journalctl -u dnsmasq -n50"
 else
-    echo "==> 7/8 跳过 DNS 域名分流 (--no-dns-split)"
+    echo "==> 7/9 跳过 DNS 域名分流 (--no-dns-split)"
 fi
 
-echo "==> 8/8 系统 DNS -> 127.0.0.1"
+echo "==> 8/9 系统 DNS -> 127.0.0.1"
 cp -a /etc/resolv.conf /etc/resolv.conf.redsocks.bak 2>/dev/null || true
 if readlink -f /etc/resolv.conf 2>/dev/null | grep -q 'systemd/resolve'; then
     echo "    检测到 systemd-resolved，关闭其 stub listener"
@@ -290,7 +380,7 @@ else
     printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf
 fi
 
-echo "==> 自检"
+echo "==> 9/9 自检"
 for url in https://www.google.com https://github.com https://www.baidu.com; do
     code=$(curl -s --max-time 15 -o /dev/null -w '%{http_code}' "$url" || echo 000)
     printf '    %-28s %s\n' "$url" "$code"
@@ -299,10 +389,12 @@ done
 cat <<EOF
 
 安装完成。
+  发行版      : $DISTRO_NAME
   代理        : $PROXY_TYPE://$PROXY_IP:$PROXY_PORT
   模式        : $MODE
   DNS 分流    : $DNS_SPLIT
   网关模式    : $GATEWAY${LAN_IP:+ (LAN $LAN_IP)}
+  splice      : $SPLICE
   查看规则    : sudo redsocks-nft show
   更新 IP 段表: sudo redsocks-refresh
   更新域名表  : sudo redsocks-refresh-domains

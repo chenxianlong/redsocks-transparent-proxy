@@ -34,10 +34,21 @@ app
 
 ## Requirements
 
-- Debian 12/13 or Ubuntu 22.04+ (systemd, nftables, python3, curl)
+- **OS** (auto-detected):
+
+  | Distro | redsocks source | Notes |
+  | --- | --- | --- |
+  | Debian 12/13, Ubuntu 22.04+ | `redsocks` package | original target |
+  | RHEL / CentOS / Rocky / Alma / Fedora | **built from source** | CRLF fix patch applied automatically |
+
+- `systemd` + `nftables` + `python3` + `curl`
 - root
 - a working SOCKS5 / HTTP proxy. Test it first:
   `curl -x socks5h://HOST:PORT -sI https://www.google.com`
+
+> On RHEL-family hosts the installer uses `dnf` to pull build deps
+> (`gcc make libevent-devel patch`) and, when SELinux is `Enforcing`, labels the
+> non-53 unbound port with `dns_port_t`. See [`docs/platform-support.md`](docs/platform-support.md).
 
 ## Install
 
@@ -57,6 +68,9 @@ curl -fsSL https://raw.githubusercontent.com/chenxianlong/redsocks-transparent-p
 
 > If `raw.githubusercontent.com` is blocked on your network, clone the repo through
 > a proxy or a mirror first, then run `scripts/install.sh`.
+>
+> On RHEL / CentOS / Rocky / Alma nothing else is needed: the script installs deps
+> with `dnf`, builds redsocks from source, writes a systemd unit and handles SELinux.
 
 ### Options
 
@@ -71,6 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/chenxianlong/redsocks-transparent-p
 | `--allowlist` | only proxy IPs in `not_cn.txt` (default is China-bypass) | off |
 | `--gateway` | also forward for the LAN (`ip_forward` + `nat/prerouting`) | off |
 | `--port` | redsocks local port | `12345` |
+| `--splice` | `on` / `off`, redsocks data pump | Debian=`on`, RHEL-family=`off` |
 
 ```bash
 # typical
