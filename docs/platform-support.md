@@ -72,7 +72,7 @@ ExecStart=/usr/sbin/redsocks -c /etc/redsocks.conf
   ClientHello 一直没被转发。
 
 **解法**：强制使用 `evbuffer_readln(EVBUFFER_EOL_CRLF)`。补丁见
-[`scripts/patches/redsocks-0.5-evbuffer-readline.patch`](../scripts/patches/redsocks-0.5-evbuffer-readline.patch)，
+[`scripts/patches/redsocks-0.5-evbuffer-readline.patch`](https://github.com/chenxianlong/redsocks-transparent-proxy/blob/main/scripts/patches/redsocks-0.5-evbuffer-readline.patch)，
 `scripts/redsocks-build.sh` 在编译前自动应用。
 
 同时 RHEL 系默认 `splice = off`（用 buffer pump），进一步规避握手期数据处理差异。
@@ -129,7 +129,7 @@ EOF
 # 8. dnsmasq(53) → unbound(5353)，并把系统 DNS 指向 127.0.0.1（nmcli）
 ```
 
-完整参数化实现见 [`scripts/install.sh`](../scripts/install.sh)。
+完整参数化实现见 [`scripts/install.sh`](https://github.com/chenxianlong/redsocks-transparent-proxy/blob/main/scripts/install.sh)。
 
 ## 验证
 
