@@ -21,6 +21,8 @@
 - 新增 MkDocs Material 在线文档（GitHub Pages：`mkdocs.yml` + `.github/workflows/pages.yml`）
   <https://chenxianlong.github.io/redsocks-transparent-proxy/>
 - README / README.en 增加「相关文章」入口
+- README / README.en 新增「DNS 域名分流是怎么判定的」小节（静态域名表 + 后缀匹配，
+  以及域名分流与 IP 分流的区别）
 
 ### Changed
 

@@ -124,6 +124,45 @@ sudo redsocks-nft show
 sudo bash scripts/install.sh --proxy HOST:PORT --allowlist
 ```
 
+## DNS 域名分流是怎么判定的
+
+**不是运行时探测，而是一张社区维护的静态域名表 + dnsmasq 的后缀匹配。**
+
+`dnsmasq`（127.0.0.1:53）里：
+
+- 默认所有域名 → `127.0.0.1#5353`（`unbound`，上游 TCP 经代理，防污染）；
+- **命中中国域名表**的域名 → `--direct-dns`（默认 `223.5.5.5`）直连解析。
+
+中国域名表由 `redsocks-refresh-domains` 从
+[felixonmars/dnsmasq-china-list](https://github.com/felixonmars/dnsmasq-china-list)
+生成（`accelerated-domains.china.conf` + `apple.china.conf`，约 11 万条），加上内置的
+`.cn` 兜底，写成 `/etc/dnsmasq.d/china-domains.conf`：
+
+```conf
+server=/baidu.com/223.5.5.5
+server=/taobao.com/223.5.5.5
+...
+server=/.cn/223.5.5.5
+```
+
+匹配规则是 **按域名后缀**（`server=/baidu.com/` 命中 `baidu.com` 及其子域，不命中
+`notbaidu.com`），多条命中时 **最长（最具体）优先**。没命中的一律走代理 DNS。
+
+> ⚠️ **域名分流 ≠ 流量分流**，两者是独立的：
+
+| 层 | 判定依据 | 决定什么 |
+| --- | --- | --- |
+| **DNS** | 域名表（静态、后缀匹配） | 用国内 DNS 直连解析，还是经代理解析（防污染） |
+| **TCP** | 目标 **IP** 是否在 `chnroute.txt`（APNIC 等 RIR 数据） | 直连，还是走代理 |
+
+也就是说：**域名表只决定「用哪个 DNS 解析」，真正决定流量走不走代理的是解析出的目标 IP。**
+后果：未收录的国内域名会经代理解析，但拿到国内 CDN 的 IP 后 TCP 仍按 IP 直连
+（只是 DNS 多绕一跳），不会断。
+
+**自定义域名**：把 `server=/你的域名/223.5.5.5` 写进 `/etc/dnsmasq.d/` 下的独立文件，
+再 `systemctl restart dnsmasq`。别直接改 `china-domains.conf`，它会被
+`redsocks-refresh-domains` 覆盖。
+
 ## 网关模式（实验性）
 
 加 `--gateway` 后：
