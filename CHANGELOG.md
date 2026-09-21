@@ -18,6 +18,8 @@
 - unbound 配置目录按发行版区分（Debian `unbound.conf.d/`，RHEL `conf.d/`）
 - 新增 `docs/platform-support.md`：平台差异、发行版适配与踩坑记录
 - 新增 `docs/blog-rhel-transparent-proxy.md`：RHEL 适配全过程长文（可投稿博客/掘金）
+- 新增 MkDocs Material 在线文档（GitHub Pages：`mkdocs.yml` + `.github/workflows/pages.yml`）
+  <https://chenxianlong.github.io/redsocks-transparent-proxy/>
 - README / README.en 增加「相关文章」入口
 
 ### Changed

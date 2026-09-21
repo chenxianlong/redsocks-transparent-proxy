@@ -9,6 +9,8 @@ Transparent split routing for a **Linux server in mainland China**:
 
 Built on `redsocks` + `nftables` + `dnsmasq` + `unbound`. No application config changes.
 
+📖 **Online docs: <https://chenxianlong.github.io/redsocks-transparent-proxy/>**
+
 ## How it works
 
 ![architecture](docs/architecture.en.png)

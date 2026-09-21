@@ -10,6 +10,8 @@
 
 English: [README.en.md](README.en.md) · 变更记录: [CHANGELOG.md](CHANGELOG.md) · 博客: [在 RHEL/CentOS/Rocky 上部署透明分流](docs/blog-rhel-transparent-proxy.md)
 
+📖 **在线文档：<https://chenxianlong.github.io/redsocks-transparent-proxy/>**
+
 ## 架构
 
 ![架构图](docs/architecture.png)
