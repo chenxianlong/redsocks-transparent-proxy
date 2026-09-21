@@ -223,6 +223,13 @@ git clone https://github.com/chenxianlong/redsocks-transparent-proxy ~/.agents/s
 
 See [references/troubleshooting.md](references/troubleshooting.md).
 
+## Related articles
+
+- [Migrating a Debian-only transparent-proxy setup to Rocky Linux 10](docs/blog-rhel-transparent-proxy.md) *(Chinese)*
+  — full write-up of the RHEL-family port, including the libevent trap where the
+  proxy returns `200 Connection established` but the tunnel hangs forever.
+- [Platform support](docs/platform-support.md) — platform matrix and manual steps.
+
 ## Data sources
 
 - China IPv4: APNIC `delegated-apnic-latest`

@@ -17,6 +17,8 @@
 - RHEL 系自动处理 SELinux：为非 53 端口（unbound `5353`）打 `dns_port_t` 标签
 - unbound 配置目录按发行版区分（Debian `unbound.conf.d/`，RHEL `conf.d/`）
 - 新增 `docs/platform-support.md`：平台差异、发行版适配与踩坑记录
+- 新增 `docs/blog-rhel-transparent-proxy.md`：RHEL 适配全过程长文（可投稿博客/掘金）
+- README / README.en 增加「相关文章」入口
 
 ### Changed
 

@@ -8,7 +8,7 @@
 
 基于 `redsocks` + `nftables` + `dnsmasq` + `unbound`，纯内核转发，无需改应用配置。
 
-English: [README.en.md](README.en.md) · 变更记录: [CHANGELOG.md](CHANGELOG.md)
+English: [README.en.md](README.en.md) · 变更记录: [CHANGELOG.md](CHANGELOG.md) · 博客: [在 RHEL/CentOS/Rocky 上部署透明分流](docs/blog-rhel-transparent-proxy.md)
 
 ## 架构
 
@@ -235,6 +235,13 @@ git clone https://github.com/chenxianlong/redsocks-transparent-proxy \
 5. 检测 SOCKS5 UDP relay 时注意回复源端口可能不同，要用**未 connect** 的 socket 看。
 
 更多细节见 [references/troubleshooting.md](references/troubleshooting.md)。
+
+## 相关文章
+
+- [把「Debian 专属」的透明分流方案移植到 Rocky Linux 10](docs/blog-rhel-transparent-proxy.md)
+  —— 完整记录 RHEL 系适配过程，重点剖析「代理已返回 `200 Connection established`
+  却一直卡住」的 libevent 陷阱，以及 `daemon = on` 假死、SELinux 端口标签等问题。
+- [平台支持与发行版差异](docs/platform-support.md) —— 平台矩阵、原理与手工部署步骤。
 
 ## 数据来源
 
